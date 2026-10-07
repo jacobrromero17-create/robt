@@ -5,7 +5,9 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const URL_CONSULTA = 'https://zonapagos.com/NV_PagosN3/Views/preLogin/PreLoginPage.aspx?ico=33968';
+// La URL original (PreLoginPage.aspx?ico=33968) solo responde con un header "Refresh: 5" hacia este
+// destino, es decir, una espera fija de 5 s. Se entra directo al destino para no pagar esos 5 s.
+const URL_CONSULTA = 'https://www.zonapagos.com/t_gmacbd/';
 const SEL = {
   cedula: '#Login_InicioLogin_Mod9_IdCliente',
   placa: '#Login_InicioLogin_Mod9_IdPago',
@@ -111,16 +113,55 @@ async function guardarEvidencia(page, tag) {
   } catch { /* no es crítico */ }
 }
 
-async function consultar({ cedula, placa }) {
+// Abre una sesión nueva y la deja parada en el formulario de consulta.
+async function abrirFormulario() {
   const browser = await getBrowser();
   const ctx = await browser.newContext({ locale: 'es-CO', timezoneId: 'America/Bogota', viewport: { width: 1280, height: 900 } });
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(30000);
   try {
-    // 1. Entrar al link y esperar la interfaz de consulta (hay redirecciones).
+    // Imágenes, fuentes y media no aportan al resultado: no se descargan.
+    await ctx.route('**/*', (r) => (['image', 'font', 'media'].includes(r.request().resourceType()) ? r.abort() : r.continue()));
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(30000);
     await page.goto(URL_CONSULTA, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForSelector(SEL.cedula, { state: 'visible', timeout: 45000 });
+    return { ctx, page, t: Date.now() };
+  } catch (e) {
+    await ctx.close().catch(() => {});
+    throw e;
+  }
+}
 
+// Sesiones ya abiertas en el formulario: el cliente solo digita y consulta, sin esperar la carga.
+const POOL_OBJETIVO = 2;
+const POOL_VIDA_MS = 3 * 60 * 1000; // pasado esto la sesión del portal podría vencer
+const pool = [];
+let cerrando = false;
+
+function rellenarPool() {
+  while (!cerrando && pool.length < POOL_OBJETIVO) {
+    const p = abrirFormulario();
+    p.catch(() => {});
+    pool.push(p);
+    p.then((h) => setTimeout(() => {
+      const i = pool.indexOf(p);
+      if (i >= 0) { pool.splice(i, 1); h.ctx.close().catch(() => {}); rellenarPool(); }
+    }, POOL_VIDA_MS).unref(), () => {
+      const i = pool.indexOf(p);
+      if (i >= 0) pool.splice(i, 1);
+    });
+  }
+}
+
+async function tomarFormulario() {
+  const p = pool.shift();
+  rellenarPool();
+  if (p) { try { return await p; } catch { /* se abre uno propio */ } }
+  return abrirFormulario();
+}
+
+async function consultar({ cedula, placa }) {
+  const { ctx, page } = await tomarFormulario();
+  try {
     // 2. Digitar los datos del cliente.
     await page.fill(SEL.cedula, cedula);
     await page.fill(SEL.placa, placa);
@@ -170,11 +211,13 @@ async function consultar({ cedula, placa }) {
 }
 
 async function cerrar() {
+  cerrando = true;
+  await Promise.all(pool.splice(0).map((p) => p.then((h) => h.ctx.close(), () => {}).catch(() => {})));
   if (browserPromise) { const b = await browserPromise.catch(() => null); if (b) await b.close(); browserPromise = null; }
 }
 
 // Enciende el navegador por anticipado (al arrancar el servidor) para que el primer
 // cliente no pague el costo de abrirlo.
-function precalentar() { return getBrowser().catch((e) => console.error('[precalentar]', e.message)); }
+function precalentar() { return getBrowser().then(rellenarPool).catch((e) => console.error('[precalentar]', e.message)); }
 
 module.exports = { consultar, cerrar, precalentar, ConsultaError, extraerEnPagina, extraerPorTextoEnPagina };

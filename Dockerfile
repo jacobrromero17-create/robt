@@ -12,7 +12,7 @@ RUN npm install --omit=dev
 # Instala Chromium y sus dependencias de sistema (libnss3, libatk, etc.).
 RUN npx playwright install --with-deps chromium
 
-COPY index.html index2.html server.js robot.js ./
+COPY index.html index2.html server.js robot.js robots.js ./
 
 ENV PORT=3000
 EXPOSE 3000

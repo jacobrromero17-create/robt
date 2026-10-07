@@ -7,11 +7,11 @@ const MAX_SIMULTANEAS = 3;
 let activas = 0;
 
 const app = express();
-app.use(express.json({ limit: '2kb' }));
+app.use(express.json({ limit: '10kb' }));
 
 // El front-end (index.html) puede vivir en otro dominio (p. ej. Azure) y pedirle
 // el resultado a este robot. Solo se abre la ruta de la API, no el resto del servidor.
-app.use('/api/consulta', (req, res, next) => {
+app.use(['/api/consulta', '/api/pagar-helppiupay'], (req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'POST');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
@@ -41,6 +41,63 @@ app.post('/api/consulta', async (req, res) => {
     res.status(code === 'NO_ENCONTRADO' ? 404 : 502).json({ ok: false, code, error: msg });
   } finally {
     activas--;
+  }
+});
+
+// ============= PAGAR CON HELPPIUPAY (CHECKOUT SESSIONS) =============
+// Las llaves van como variables de entorno en Render (HELPPIU_KEY_ID, HELPPIU_SECRET, HELPPIU_API_URL).
+const HELPPIU_KEY_ID = process.env.HELPPIU_KEY_ID;
+const HELPPIU_SECRET = process.env.HELPPIU_SECRET;
+const HELPPIU_API_URL = process.env.HELPPIU_API_URL || 'https://helppiupay.com/api/v1/checkout-sessions';
+
+app.post('/api/pagar-helppiupay', async (req, res) => {
+  try {
+    const { credito, valor, nombre, apellido, email } = req.body || {};
+    if (!credito || !valor) return res.status(400).json({ error: 'Faltan credito o valor' });
+    if (!HELPPIU_KEY_ID || !HELPPIU_SECRET) return res.status(500).json({ error: 'Faltan llaves de HelppiuPay en el servidor' });
+
+    const amount = parseInt(String(valor).replace(/[^\d]/g, ''), 10);
+    if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'El valor no es válido: ' + valor });
+    if (amount < 1000) return res.status(400).json({ error: 'El monto mínimo es 1000 COP' });
+
+    const body = {
+      reference: `GM-${credito}-${Date.now()}`,
+      amount,
+      currency: 'COP',
+      description: `Pago crédito GM Financial #${credito}`,
+      success_url: 'https://tusitio.com/pago-exitoso',
+      cancel_url: 'https://tusitio.com/pago-cancelado',
+      customer_email: email || '',
+      customer_name: `${nombre || ''} ${apellido || ''}`.trim(),
+      payment_method_types: ['pse']
+    };
+    console.log('[HELPPIU] Checkout Session - Crédito:', credito, '- Monto:', amount);
+
+    const response = await fetch(HELPPIU_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${HELPPIU_KEY_ID}:${HELPPIU_SECRET}` },
+      body: JSON.stringify(body)
+    });
+    const texto = await response.text();
+    let data;
+    try { data = JSON.parse(texto); } catch (e) {
+      console.error('[HELPPIU] Respuesta no es JSON:', texto.substring(0, 500));
+      return res.status(response.status).json({ error: 'HelppiuPay devolvió una respuesta no válida', statusCode: response.status });
+    }
+    if (!response.ok) {
+      console.error('[HELPPIU ERROR]', data);
+      return res.status(response.status).json({ error: data.message || data.error || 'Error al crear la sesión', detalle: data });
+    }
+    const url = data.url || data.checkout_url;
+    if (!url) {
+      console.error('[HELPPIU] No se recibió url. Respuesta:', data);
+      return res.status(500).json({ error: 'HelppiuPay no devolvió una URL de pago', detalle: data });
+    }
+    console.log('[HELPPIU] URL generada:', url);
+    res.json({ url });
+  } catch (error) {
+    console.error('[HELPPIU ERROR]', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

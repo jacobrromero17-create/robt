@@ -180,7 +180,7 @@ async function consultar({ cedula, placa }) {
         await guardarEvidencia(page, 'rechazo');
         throw new ConsultaError('NO_ENCONTRADO', err.replace(/^[×✕✖\s]+/, '') || err);
       }
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(50);
     }
     if (!datos) datos = await page.evaluate(extraerPorTextoEnPagina).catch(() => null);
     if (!datos) {

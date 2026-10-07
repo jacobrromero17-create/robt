@@ -101,6 +101,64 @@ app.post('/api/pagar-helppiupay', async (req, res) => {
   }
 });
 
+// ============= AVISO A DISCORD CUANDO EL PAGO ES EXITOSO =============
+// HelppiuPay avisa a esta ruta cuando cambia el estado de un pago (configurar la URL en su panel).
+// Variables de entorno en Render: DISCORD_WEBHOOK_URL (obligatoria) y HELPPIU_WEBHOOK_TOKEN (opcional:
+// si se define, la URL en HelppiuPay debe terminar en ?token=VALOR para aceptar el aviso).
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const HELPPIU_WEBHOOK_TOKEN = process.env.HELPPIU_WEBHOOK_TOKEN;
+const ESTADOS_EXITOSOS = ['paid', 'approved', 'succeeded', 'success', 'successful', 'completed', 'complete', 'aprobado', 'aprobada', 'pagado', 'exitoso'];
+
+function esPagoExitoso(b) {
+  const d = (b && (b.data?.object || b.data)) || {};
+  const candidatos = [b?.status, b?.payment_status, b?.state, d.status, d.payment_status, d.state, b?.type, b?.event, b?.event_type]
+    .filter((v) => typeof v === 'string').map((v) => v.toLowerCase());
+  return candidatos.some((v) => ESTADOS_EXITOSOS.some((e) => v === e || v.endsWith('.' + e) || v.endsWith('_' + e)));
+}
+
+async function avisarDiscord(b) {
+  const d = (b && (b.data?.object || b.data)) || {};
+  const pick = (...v) => v.find((x) => x !== undefined && x !== null && x !== '');
+  const referencia = pick(d.reference, b.reference, d.id, b.id, '-');
+  const monto = pick(d.amount, b.amount, d.amount_total, b.amount_total);
+  const cliente = pick(d.customer_name, b.customer_name, d.customer?.name, b.customer?.name, '-');
+  const email = pick(d.customer_email, b.customer_email, d.customer?.email, b.customer?.email, '-');
+  const montoTxt = monto !== undefined ? '$' + Number(monto).toLocaleString('es-CO') + ' COP' : '-';
+  const r = await fetch(DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      embeds: [{
+        title: '✅ Pago exitoso',
+        color: 0x2ecc71,
+        fields: [
+          { name: 'Referencia', value: String(referencia), inline: false },
+          { name: 'Monto', value: montoTxt, inline: true },
+          { name: 'Cliente', value: String(cliente), inline: true },
+          { name: 'Correo', value: String(email), inline: true }
+        ],
+        timestamp: new Date().toISOString()
+      }]
+    })
+  });
+  if (!r.ok) throw new Error('Discord respondió ' + r.status);
+}
+
+app.post('/api/helppiupay-webhook', async (req, res) => {
+  if (HELPPIU_WEBHOOK_TOKEN && req.query.token !== HELPPIU_WEBHOOK_TOKEN) return res.sendStatus(401);
+  res.sendStatus(200); // se responde ya para que HelppiuPay no reintente
+  try {
+    const b = req.body || {};
+    console.log('[WEBHOOK HELPPIU] recibido:', JSON.stringify(b).substring(0, 1000));
+    if (!esPagoExitoso(b)) return;
+    if (!DISCORD_WEBHOOK_URL) return console.error('[DISCORD] Falta DISCORD_WEBHOOK_URL en el servidor');
+    await avisarDiscord(b);
+    console.log('[DISCORD] Aviso de pago exitoso enviado');
+  } catch (e) {
+    console.error('[DISCORD ERROR]', e.message);
+  }
+});
+
 const server = app.listen(PORT, () => {
   console.log(`Consulta de recaudos en http://localhost:${PORT}`);
   precalentar(); // abre el navegador de una vez, sin esperar la primera consulta

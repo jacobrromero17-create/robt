@@ -9,6 +9,16 @@ let activas = 0;
 const app = express();
 app.use(express.json({ limit: '2kb' }));
 
+// El front-end (index.html) puede vivir en otro dominio (p. ej. Azure) y pedirle
+// el resultado a este robot. Solo se abre la ruta de la API, no el resto del servidor.
+app.use('/api/consulta', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // Solo se publican las dos páginas; nada más de la carpeta del proyecto.
 app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/index2.html', (_req, res) => res.sendFile(path.join(__dirname, 'index2.html')));
